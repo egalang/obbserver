@@ -1,0 +1,134 @@
+<?php
+include('header.php');
+if ( !is_user_logged_in() ) {
+	header("Location: /index.php/login");
+}
+
+$current_user = wp_get_current_user();
+$current_user_name = $current_user->first_name . " " . $current_user->last_name;
+$current_user_id = $current_user->ID;
+
+if(isset($_GET['cid']) and isset($_GET['pid'])){
+	$course_id = $_GET['cid'];
+    $period_id = $_GET['pid'];
+	$sql = "SELECT * FROM lms_courses WHERE id = $course_id";
+	$result = $conn->query($sql);
+	$row = $result->fetch_assoc();
+	$course_name = $row['name'];
+	$teacher_id = $row['teacher_id'];
+	$sql = "SELECT * FROM teachers WHERE id = $teacher_id";
+	$result = $conn->query($sql);
+	$row = $result->fetch_assoc();
+	$teacher_name = $row['firstname'] . ' ' . $row['lastname'];
+	$sql = "SELECT * FROM grading_periods WHERE id = $period_id";
+	$result = $conn->query($sql);
+	$row = $result->fetch_assoc();
+	$period_name = $row['name'];
+}
+
+?>
+	</script>
+</head>
+<body class="dt-example dt-example-bootstrap">
+        <center>
+        <h1><span><b><?php echo strtoupper($course_name)." - ".strtoupper($period_name)." - PROGRESS REPORT" ?></b></span></h1>
+        </center>
+        <br>
+        <table class="table table-bordered table-striped">
+            <tr><th>STUDENT NAME</th>
+            <?php
+            $types_sql = "SELECT assignment_types.id, assignment_types.name, assignment_types.weight, count(DISTINCT assignments.id) as cols
+                          FROM gradebook
+                          left join enrollment_list on gradebook.student_id = enrollment_list.id
+                          left join assignments on gradebook.assignment_id = assignments.id
+                          left join assignment_types on assignments.type_id = assignment_types.id
+                          where assignment_types.course_id = $course_id and assignments.period_id = $period_id
+                          group by assignment_types.id";
+            $types_result = $conn->query($types_sql);
+            if ($types_result->num_rows > 0) {
+                $i = 0;
+                while($types_row = $types_result->fetch_assoc()) {
+                    $cols = $types_row['cols'];
+                    $ass_name[$i] = $types_row['name'];
+                    echo "<th colspan = '$cols'>".$types_row['name']." (".$types_row['weight']."%)</th><th>Total</th><th>PS</th><th>WS</th>";
+                    $i = $i + 1;
+                }
+                echo "<th>IG</th><th>QG</th>";
+            }
+            echo "</tr>";
+            $sql = "SELECT enrollment_list.id, enrollment_list.lastname, enrollment_list.firstname, enrollment_list.middlename
+                    FROM lms_enrollees
+                    LEFT JOIN enrollment_list on lms_enrollees.user_id = enrollment_list.id
+                    WHERE course_id = $course_id AND role_id = 1 ORDER BY enrollment_list.lastname, enrollment_list.firstname ASC";
+            $result = $conn->query($sql);
+            if ($result->num_rows > 0) {
+                while($row = $result->fetch_assoc()) {
+                    $student_id = $row['id'];
+                    $student_name = strtoupper($row['lastname'].', '.$row['firstname'].' '.$row['middlename']);
+                    echo '<tr><td>'.$student_name.'</td>';
+                        // $types_sql = "SELECT DISTINCT assignment_types.name
+                        //               FROM gradebook
+                        //               left join enrollment_list on gradebook.student_id = enrollment_list.id
+                        //               left join assignments on gradebook.assignment_id = assignments.id
+                        //               left join assignment_types on assignments.type_id = assignment_types.id
+                        //               where assignment_types.course_id = $course_id and assignments.period_id = $period_id";
+                        // $types_result = $conn->query($types_sql);
+                        //if ($types_result->num_rows > 0) {
+                        $ig = 0;
+                        $arrlength = count($ass_name);
+                        for($x = 0; $x < $arrlength; $x++) {
+                            //while($types_row = $types_result->fetch_assoc()) {
+                            //$type_name = $types_row['name'];
+                            $grades_sql = "SELECT
+                                            enrollment_list.lastname, enrollment_list.firstname, enrollment_list.middlename,
+                                            assignment_types.name, gradebook.grade, assignments.top_score, assignment_types.weight
+                                            FROM gradebook
+                                            left join enrollment_list on gradebook.student_id = enrollment_list.id
+                                            left join assignments on gradebook.assignment_id = assignments.id
+                                            left join assignment_types on assignments.type_id = assignment_types.id
+                                            where assignment_types.course_id = $course_id and assignments.period_id = $period_id
+                                            and enrollment_list.id = $student_id and assignment_types.name = '$ass_name[$x]'";
+                            $grades_result = $conn->query($grades_sql);
+                            if ($grades_result->num_rows > 0) {
+                                $grade = 0; $top_score = 0; $ps = 0; $ws = 0;
+                                while($grades_row = $grades_result->fetch_assoc()) {
+                                    $weight = $grades_row['weight'];
+                                    echo "<td>".$grades_row['grade']."/".$grades_row['top_score']."</td>";
+                                    $grade = $grade + $grades_row['grade'];
+                                    $top_score = $top_score + $grades_row['top_score'];
+                                }
+                                $ps = 100 * ( $grade / $top_score );
+                                $ws = ( $ps * $weight ) / 100;
+                                echo "<td>".$grade."/".$top_score."</td>";
+                                echo "<td>".number_format($ps,2)."</td>";                                    
+                                echo "<td>".number_format($ws,2)."</td>";                                    
+                            }
+                            $ig = $ig + $ws;
+                            //}
+                        }
+                        $ig = round($ig,2);
+                        echo "<td>".number_format($ig,2)."</td>";
+                        $qg_sql = "SELECT * FROM grade_scale  where scale <= $ig LIMIT 1";
+                        $qg_result = $conn->query($qg_sql);
+                        $qg_row = $qg_result->fetch_assoc();
+                        $qg = $qg_row['grade'];
+                        echo "<td>".$qg."</td>";
+                        //create or update report card grade
+                        $card = "SELECT * FROM report_card WHERE student_id=$student_id AND course_id=$course_id AND period_id=$period_id";
+                        $card_result = $conn->query($card);
+                        if ($card_result->num_rows > 0) {
+                            $update = "UPDATE report_card SET grade=$qg WHERE student_id=$student_id AND course_id=$course_id AND period_id=$period_id";
+                            $conn->query($update);
+                        } else {
+                            $insert = "INSERT INTO report_card (student_id,course_id,period_id,grade) VALUES ($student_id,$course_id,$period_id,$qg)";
+                            $conn->query($insert);
+                        }
+                        //}
+                    echo '</tr>';
+                }
+            }
+            ?>
+        </table>
+        <p>Prepared by: <?php echo strtoupper($teacher_name) ?></p>
+</body>
+</html>

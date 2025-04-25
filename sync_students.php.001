@@ -1,0 +1,169 @@
+<?php
+include('enrollment_config.php');
+
+// Create connection
+$conn = new mysqli($servername, $username, $password, $dbname);
+// Check connection
+if ($conn->connect_error) {
+  die("Connection failed: " . $conn->connect_error);
+} else {
+  //echo "Connected to editor database. <br>";
+}
+
+//get URL variables
+if (isset($_GET['first'])) {
+  $first = $_GET['first'];
+} else {
+  $first = 2;
+}
+if (isset($_GET['last'])) {
+  $last = $_GET['last'] * -1;
+} else {
+  $last = -2;
+}
+
+//get school year information
+$mp = "select * from $dbname_sis.marking_periods where marking_period_id=1";
+$mp_result = $conn->query($mp);
+if ($mp_result->num_rows > 0) {
+  $mp_row = $mp_result->fetch_assoc();
+}
+
+// start sync students to sis and lms
+$students = "select * from enrollment_list where accepted='Y' and deleted='N'";
+$students_result = $conn->query($students);
+
+if ($students_result->num_rows > 0) {
+  // output data of each row
+  while($students_row = $students_result->fetch_assoc()) {
+    //echo "id: " . $students_row["id"]. " - Name: " . $students_row["firstname"]. " " . $students_row["lastname"]. "<br>";
+    //ADD STUDENTS SIS START
+    //check if the student already exists
+    //$exists = "select * from $dbname_sis.students where last_name='".$students_row['lastname']."' and first_name='".$students_row['firstname'].
+    //          "' and middle_name='".$students_row['middlename']."' and name_suffix='".$students_row['extname']."'";
+    $exists="select * from $dbname_sis.students where alt_id='".$students_row['id']."'";
+    $exists_result = $conn->query($exists);
+    if ($exists_result->num_rows > 0) {
+      //echo "student already exists. <br>";
+    } else {
+      //echo "student not found. <br>";
+      //start insert data to opensis students table
+      $sis_students = "insert into $dbname_sis.students (last_name,first_name,middle_name,name_suffix,birthdate,email,alt_id) ".
+                      "values ('".$students_row['lastname']."','".$students_row['firstname']."','".$students_row['middlename']."','".$students_row['extname'].
+                      "','".$students_row['birth']."','".$students_row['wp_email']."','".$students_row['id']."')";
+      $conn->query($sis_students);
+      //end insert data to opensis students table
+      //get student_id
+      //$id = "select * from $dbname_sis.students where last_name='".$students_row['lastname']."' and first_name='".$students_row['firstname'].
+      //                  "' and middle_name='".$students_row['middlename']."' and name_suffix='".$students_row['extname']."'";
+      $id = "select * from $dbname_sis.students where alt_id=".$students_row['id'];
+      $id_result = $conn->query($id);
+      if ($id_result->num_rows > 0) {
+        $id_row = $id_result->fetch_assoc();
+        $student_id=$id_row['student_id'];
+      }
+      //start insert data to opensis student_enrollment table
+      $enroll = "insert into $dbname_sis.student_enrollment (syear,school_id,student_id,grade_id,start_date,enrollment_code,next_school,calendar_id) ".
+                "values (".$mp_row['syear'].",".$mp_row['school_id'].",$student_id,".$students_row['level'].",'".$mp_row['start_date']."',5,1,1)";
+      $conn->query($enroll);
+      //end insert data to opensis student_enrollment table
+      //start insert data to opensis medical_info table
+      $medical = "insert into $dbname_sis.medical_info (student_id,syear,school_id) values ($student_id,".$mp_row['syear'].",".$mp_row['school_id'].")";
+      $conn->query($medical);
+      //end insert data to opensis medical_info table
+      //start insert data to opensis login_authentication table
+      //$userID=str_replace( ' ','',strtolower(  substr( $students_row["firstname"],0,2 ) . substr( $students_row["firstname"],-2 ) . $students_row["lastname"] ) );
+      //$userID=str_replace( ' ','',strtolower(  substr( $students_row["firstname"],0,1 ) . substr( $students_row["firstname"],-1 ) . $students_row["lastname"] ) );
+      //$userID=str_replace( ' ','',strtolower(  substr( $students_row["firstname"],0,1 ) . substr( trim( $students_row["firstname"] ),-1 ) . $students_row["lastname"] ) );
+      $userID=str_replace( ' ','',strtolower(  substr( $students_row["firstname"],0,$first ) . substr( trim( $students_row["firstname"] ),$last ) . $students_row["lastname"] ) );
+      //$userID=str_replace( ' ','',strtolower(  substr( $students_row["firstname"],0,2 ) . $students_row["lastname"] ) );
+      $login = "insert into $dbname_sis.login_authentication (user_id,profile_id,username) values ($student_id,3,'$userID')";
+      $conn->query($login);
+      //end insert data to opensis login_authentication table
+      //start insert data to opensis people table
+      $people = "insert into $dbname_sis.people (current_school_id,first_name,last_name,home_phone,work_phone,cell_phone,email,profile,profile_id) ".
+                "values (".$mp_row['school_id'].",'".$students_row['wp_firstname']."','".$students_row['wp_lastname']."','".$students_row['phone1'].
+                "','".$students_row['phone2']."','".$students_row['phone3']."','".$students_row['wp_email']."','parent',4)";
+      $conn->query($people);
+      //end insert data to opensis people table
+      //get people_id
+      $pid = "select * from $dbname_sis.people where first_name='".$students_row['wp_firstname']."' and last_name='".$students_row['wp_lastname'].
+             "' and email='".$students_row['wp_email']."'";
+      $pid_result = $conn->query($pid);
+      if ($pid_result->num_rows > 0) {
+        $pid_row = $pid_result->fetch_assoc();
+        $people_id=$pid_row['staff_id'];
+      }
+      //start insert data to opensis student_address table
+      $address = "insert into $dbname_sis.student_address (student_id,syear,school_id,street_address_1,street_address_2,city,state,zipcode,type) ".
+                 "values ($student_id,".$mp_row['syear'].",".$mp_row['school_id'].",'".$students_row['add1']."','".$students_row['add2']."','".$students_row['add3'].
+                 "','PH','".$students_row['zip']."','Home Address')";
+      $conn->query($address);
+      $address = "insert into $dbname_sis.student_address (student_id,syear,school_id,street_address_1,street_address_2,city,state,zipcode,type) ".
+                 "values ($student_id,".$mp_row['syear'].",".$mp_row['school_id'].",'".$students_row['add1']."','".$students_row['add2']."','".$students_row['add3'].
+                 "','PH','".$students_row['zip']."','Mail')";
+      $conn->query($address);
+      $address = "insert into $dbname_sis.student_address (student_id,syear,school_id,street_address_1,street_address_2,city,state,zipcode,type,people_id) ".
+                 "values ($student_id,".$mp_row['syear'].",".$mp_row['school_id'].",'".$students_row['add1']."','".$students_row['add2']."','".$students_row['add3'].
+                 "','PH','".$students_row['zip']."','Primary',$people_id)";
+      $conn->query($address);
+      //end insert data to opensis student_address table
+      //start insert data to opensis students_join_people table
+      $stuple = "insert into $dbname_sis.students_join_people (student_id,person_id,emergency_type,relationship) values ($student_id,$people_id,'Primary','Father')";
+      $conn->query($stuple);
+      //end insert data to opensis students_join_people table
+      //ADD STUDENTS SIS END
+      //ADD STUDENTS LMS START
+      //start insert data to moodle mdl_user table
+      $password='$2y$10$X/oIOnXPDHsQYUzNmwasXurxru79ZPQZrvLiJaucsXKj12jpdrbou';
+      $user="INSERT INTO $dbname_lms.mdl_user (auth, confirmed, policyagreed, deleted, suspended, mnethostid, username, password, idnumber, firstname, lastname, email, ".
+	    "emailstop, icq, skype, yahoo, aim, msn, phone1, phone2, institution, department, address, city, country, lang, calendartype, theme, timezone, firstaccess, ".
+	    "lastaccess, lastlogin, currentlogin, lastip, secret, picture, url, description, descriptionformat, mailformat, maildigest, maildisplay, autosubscribe, ".
+	    "trackforums, timecreated, timemodified, trustbitmask, imagealt, lastnamephonetic, firstnamephonetic, middlename, alternatename) ".
+            "VALUES ('manual', 1, 0, 0, 0, 1, '$userID', '$password', '$student_id', '".$students_row['firstname']."', '".$students_row['lastname']."', ".
+	    "'".$students_row['wp_email']."', 0, '', '', '', '', '', '', '', '', '', '', '', '', 'en', 'gregorian', '', '99', 0, 0, 0, 0, '', '', 0, '', '', ".
+	    "1, 1, 0, 2, 1, 0, 1591932870, 1591932870, 0, '', '', '', '', '');";
+      //$conn->query($user);
+      if ($conn->query($user) === TRUE) {
+        $studentID = "select * from $dbname_lms.mdl_user where idnumber = $student_id";
+        $studentID_result = $conn->query($studentID);
+        $studentID_row = $studentID_result->fetch_assoc();
+        $preference = "insert into $dbname_lms.mdl_user_preferences (userid,name,value) values (".$studentID_row['id'].",'auth_forcepasswordchange','1')";
+        $conn->query($preference);
+        //echo "New record created successfully";
+      } else {
+        //echo "Error: " . $sql . "<br>" . $conn->error;
+      }
+      //end insert data to moodle mdl_user table
+      //ADD STUDENTS LMS END
+    }
+  }
+} else {
+  //echo "0 results";
+}
+//end sync students to sis and lms
+
+//start sync levels to sis and lms
+//$empty_levels="TRUNCATE $dbname_sis.school_gradelevels";
+//$conn->query($empty_levels);
+//$levels="select * from grade_levels";
+//$levels_result = $conn->query($levels);
+//$i=1;
+//if ($levels_result->num_rows > 0) {
+  //output data of each row
+  //while($levels_row = $levels_result->fetch_assoc()) {
+    //$add_level="INSERT INTO $dbname_sis.school_gradelevels (id, school_id, short_name, title, sort_order) ".
+    //           "VALUES (".$levels_row['id'].",".$mp_row['school_id'].",'GL$i','".$levels_row['name']."', $i)";
+    //$conn->query($add_level);
+    //$i++;
+  //}
+//}
+//end sync levels to sis and lms
+
+
+
+
+
+$conn->close();
+header("Location: sync_students_list.php?message=1");
+?>
